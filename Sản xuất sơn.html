@@ -1,0 +1,287 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Điều Độ Sản Xuất Sơn - Supabase Realtime</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Supabase JS Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        .kanban-col { min-height: 75vh; }
+        .card-alkyd { border-left: 5px solid #f59e0b; }
+        .card-epoxy { border-left: 5px solid #3b82f6; }
+        .card-pu { border-left: 5px solid #10b981; }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans p-3">
+
+    <!-- Header -->
+    <header class="mb-4 flex flex-wrap justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
+        <div>
+            <h1 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <i class="fa-solid fa-industry text-indigo-600"></i>
+                Hệ Thống Điều Độ Dòng Chảy Sản Xuất Sơn
+            </h1>
+            <p class="text-xs text-slate-500">Đồng bộ Realtime (Supabase) giữa Tổ Phân Tán - Nghiền - Pha Loãng - Đóng Thùng - Kho</p>
+        </div>
+        <div class="flex gap-2 mt-2 sm:mt-0">
+            <span id="sync-status" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                <i class="fa-solid fa-spinner fa-spin mr-1.5"></i> Đang kết nối...
+            </span>
+            <button onclick="openModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium shadow-sm transition">
+                <i class="fa-solid fa-plus mr-1"></i> Tạo Mẻ Sơn Mới
+            </button>
+        </div>
+    </header>
+
+    <!-- Bảng Kanban 7 Cột -->
+    <div class="grid grid-cols-1 md:grid-cols-7 gap-2 text-xs">
+        
+        <!-- 1. PHÂN TÁN THÔ -->
+        <div class="bg-slate-200/80 p-2 rounded-lg">
+            <div class="font-bold text-slate-700 mb-2 flex justify-between items-center bg-white p-1.5 rounded border">
+                <span class="text-amber-600">1. Phân tán thô</span>
+                <span id="c-step1" class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">0</span>
+            </div>
+            <div id="step1" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 1.5 CHỜ NGHIỀN -->
+        <div class="bg-amber-100/50 p-2 rounded-lg border border-amber-200">
+            <div class="font-bold text-amber-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-amber-300">
+                <span>⏳ Chờ nghiền</span>
+                <span id="c-wait2" class="bg-amber-100 px-1.5 py-0.5 rounded text-amber-800">0</span>
+            </div>
+            <div id="wait2" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 2. PHÂN TÁN TINH -->
+        <div class="bg-slate-200/80 p-2 rounded-lg">
+            <div class="font-bold text-slate-700 mb-2 flex justify-between items-center bg-white p-1.5 rounded border">
+                <span class="text-blue-600">2. Phân tán tinh</span>
+                <span id="c-step2" class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">0</span>
+            </div>
+            <div id="step2" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 2.5 CHỜ PHA LOÃNG -->
+        <div class="bg-blue-100/50 p-2 rounded-lg border border-blue-200">
+            <div class="font-bold text-blue-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-blue-300">
+                <span>⏳ Chờ pha loãng</span>
+                <span id="c-wait3" class="bg-blue-100 px-1.5 py-0.5 rounded text-blue-800">0</span>
+            </div>
+            <div id="wait3" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 3. PHA LOÃNG -->
+        <div class="bg-slate-200/80 p-2 rounded-lg">
+            <div class="font-bold text-slate-700 mb-2 flex justify-between items-center bg-white p-1.5 rounded border">
+                <span class="text-emerald-600">3. Pha loãng</span>
+                <span id="c-step3" class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">0</span>
+            </div>
+            <div id="step3" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 3.5 CHỜ ĐÓNG THÙNG -->
+        <div class="bg-emerald-100/50 p-2 rounded-lg border border-emerald-200">
+            <div class="font-bold text-emerald-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-emerald-300">
+                <span>⏳ Chờ đóng thùng</span>
+                <span id="c-wait4" class="bg-emerald-100 px-1.5 py-0.5 rounded text-emerald-800">0</span>
+            </div>
+            <div id="wait4" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 4. ĐÓNG THÙNG & KHO -->
+        <div class="bg-purple-100/50 p-2 rounded-lg border border-purple-200">
+            <div class="font-bold text-purple-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-purple-300">
+                <span>4. Đóng thùng & Kho</span>
+                <span id="c-step4" class="bg-purple-100 px-1.5 py-0.5 rounded text-purple-800">0</span>
+            </div>
+            <div id="step4" class="kanban-col space-y-2"></div>
+        </div>
+
+    </div>
+
+    <!-- Modal Tạo Mẻ Mới -->
+    <div id="modal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl max-w-md w-full p-5 shadow-xl">
+            <h3 class="text-base font-bold mb-3 text-slate-800">Tạo Phiếu Công Nghệ Mới</h3>
+            <form id="paintForm" onsubmit="saveBatch(event)" class="space-y-3 text-xs">
+                <div>
+                    <label class="block font-semibold uppercase text-slate-500 mb-1">Mã Phiếu CN / Tên Sơn</label>
+                    <input type="text" id="code" required placeholder="VD: PCN-8821 / Epoxy Phủ Xám" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Hệ Sơn</label>
+                        <select id="type" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                            <option value="alkyd">Alkyd</option>
+                            <option value="epoxy">Epoxy</option>
+                            <option value="pu">PU</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Khối lượng (Kg)</label>
+                        <input type="number" id="volume" required placeholder="500" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Thiết bị (Máy khuấy/Nghiền)</label>
+                        <input type="text" id="machine" placeholder="VD: Máy K02, Nghiền N01" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Người vận hành</label>
+                        <input type="text" id="operator" placeholder="VD: Anh Tâm" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="closeModal()" class="px-3 py-1.5 border rounded hover:bg-slate-50">Hủy</button>
+                    <button type="submit" class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700">Tạo Mẻ Sơn</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // CẤU HÌNH SUPABASE (Thay 2 giá trị này từ Supabase Project của bạn)
+        const SUPABASE_URL = 'https://rzrmqshhprnxzvobeegv.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_b0rHfU6id1QT-Vb93kWzqQ_t-IEAl_T';
+
+        const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        let localBatches = [];
+
+        // Khởi tạo và tải dữ liệu ban đầu
+        async function init() {
+            const statusEl = document.getElementById("sync-status");
+            statusEl.className = "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800";
+            statusEl.innerHTML = '<i class="fa-solid fa-wifi mr-1.5"></i> Kết nối Supabase Realtime';
+
+            // Tải dữ liệu lần đầu
+            await loadBatches();
+
+            // Lắng nghe biến động Realtime từ Supabase (Thêm, Sửa, Xóa mẻ sơn)
+            _supabase
+                .channel('batches-realtime')
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'batches' }, payload => {
+                    loadBatches(); // Mỗi khi có ai nhấn nút, tự động load lại dữ liệu lập tức
+                })
+                .subscribe();
+        }
+
+        async function loadBatches() {
+            const { data, error } = await _supabase
+                .from('batches')
+                .select('*')
+                .order('created_at', { ascending: true });
+
+            if (!error) {
+                localBatches = data;
+                render(localBatches);
+            }
+        }
+
+        const STAGES = {
+            'step1': { id: 'step1', next: 'wait2', nextBtn: 'Hoàn tất ➔ Chờ Nghiền' },
+            'wait2': { id: 'wait2', next: 'step2', nextBtn: 'Bắt đầu Nghiền ➔' },
+            'step2': { id: 'step2', next: 'wait3', nextBtn: 'Hoàn tất ➔ Chờ Pha Loãng' },
+            'wait3': { id: 'wait3', next: 'step3', nextBtn: 'Bắt đầu Pha Loãng ➔' },
+            'step3': { id: 'step3', next: 'wait4', nextBtn: 'Hoàn tất ➔ Chờ Đóng Thùng' },
+            'wait4': { id: 'wait4', next: 'step4', nextBtn: 'Bắt đầu Đóng Thùng ➔' },
+            'step4': { id: 'step4', next: 'done', nextBtn: 'Nhập Kho Complete ✔' }
+        };
+
+        function render(batches) {
+            ['step1', 'wait2', 'step2', 'wait3', 'step3', 'wait4', 'step4'].forEach(colId => {
+                document.getElementById(colId).innerHTML = '';
+            });
+
+            const counts = { step1:0, wait2:0, step2:0, wait3:0, step3:0, wait4:0, step4:0 };
+
+            batches.forEach(b => {
+                const stageKey = b.stage;
+                const colId = STAGES[stageKey] ? STAGES[stageKey].id : 'step1';
+                counts[colId]++;
+
+                const isWait = String(stageKey).startsWith('wait');
+                const card = document.createElement('div');
+                card.className = `bg-white p-2.5 rounded shadow-sm border card-${b.type} ${isWait ? 'bg-amber-50/40 border-amber-300' : ''}`;
+                
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="font-bold text-slate-800 text-xs">${b.code}</span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${b.type === 'alkyd' ? 'bg-amber-100 text-amber-800' : b.type === 'epoxy' ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}">${b.type}</span>
+                    </div>
+                    <div class="text-[11px] text-slate-600 space-y-0.5 my-1.5">
+                        <div><i class="fa-solid fa-weight-hanging text-slate-400 w-4"></i><b>${b.volume}</b> kg</div>
+                        <div><i class="fa-solid fa-gears text-slate-400 w-4"></i>${b.machine || 'Chưa gán máy'}</div>
+                        <div><i class="fa-solid fa-user text-slate-400 w-4"></i>${b.operator || 'Chưa gán NV'}</div>
+                    </div>
+                    <div class="pt-2 border-t flex justify-between items-center gap-1">
+                        ${stageKey !== 'step4' ? `
+                            <button onclick="advanceStage(${b.id}, '${STAGES[stageKey].next}')" class="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-medium py-1 px-1.5 rounded text-[10px] text-center border border-indigo-200 transition">
+                                ${STAGES[stageKey].nextBtn}
+                            </button>
+                        ` : `
+                            <button onclick="advanceStage(${b.id}, 'done')" class="w-full bg-emerald-600 text-white font-medium py-1 px-1.5 rounded text-[10px] text-center">
+                                <i class="fa-solid fa-check mr-1"></i>Đã Nhập Kho
+                            </button>
+                        `}
+                        <button onclick="deleteBatch(${b.id})" class="text-slate-300 hover:text-red-500 p-1"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                `;
+                
+                const container = document.getElementById(colId);
+                if(container) container.appendChild(card);
+            });
+
+            Object.keys(counts).forEach(key => {
+                const el = document.getElementById(`c-${key}`);
+                if(el) el.innerText = counts[key];
+            });
+        }
+
+        async function saveBatch(e) {
+            e.preventDefault();
+            const newBatch = {
+                code: document.getElementById('code').value,
+                type: document.getElementById('type').value,
+                volume: parseInt(document.getElementById('volume').value),
+                machine: document.getElementById('machine').value,
+                operator: document.getElementById('operator').value,
+                stage: 'step1'
+            };
+            
+            await _supabase.from('batches').insert([newBatch]);
+            closeModal();
+            document.getElementById('paintForm').reset();
+        }
+
+        async function advanceStage(id, nextStage) {
+            if (nextStage === 'done') {
+                if(confirm('Mẻ sơn này đã đóng thùng và kiểm tra QC đạt. Xác nhận nhập kho thành phẩm?')) {
+                    await _supabase.from('batches').delete().eq('id', id);
+                }
+            } else {
+                await _supabase.from('batches').update({ stage: nextStage }).eq('id', id);
+            }
+        }
+
+        async function deleteBatch(id) {
+            if(confirm('Bạn có chắc chắn muốn xóa phiếu công nghệ này?')) {
+                await _supabase.from('batches').delete().eq('id', id);
+            }
+        }
+
+        function openModal() { document.getElementById('modal').classList.remove('hidden'); }
+        function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+
+        init();
+    </script>
+</body>
+</html>
