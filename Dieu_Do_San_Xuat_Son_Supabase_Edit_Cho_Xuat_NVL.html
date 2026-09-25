@@ -1,0 +1,1145 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Điều Độ Sản Xuất Sơn - Supabase Realtime & Drag-Drop</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Supabase JS Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        .kanban-col { min-height: 70vh; }
+        .card-ghost { opacity: 0.4; }
+        .drag-over { background-color: rgba(99, 102, 241, 0.15); border: 2px dashed #6366f1 !important; }
+        .bottleneck-warning { animation: pulse 2s infinite; border: 2px solid #ef4444 !important; }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        .kanban-col { transition: background-color .15s ease, border-color .15s ease; }
+        .batch-card { will-change: transform; }
+        .batch-card button { cursor: pointer; }
+        .is-busy { opacity: .65; pointer-events: none; }
+        .toast-enter { animation: toastIn .18s ease-out; }
+        @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans p-3 min-h-screen">
+
+    <!-- Screen Login Overlay -->
+    <div id="login-modal" class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border">
+            <div class="text-center mb-6">
+                <div class="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-2 text-xl font-bold">
+                    <i class="fa-solid fa-industry"></i>
+                </div>
+                <h2 class="text-lg font-bold text-slate-800">Đăng Nhập Hệ Thống Điều Độ</h2>
+                <p class="text-xs text-slate-500">Hệ thống điều hành sản xuất sơn Realtime</p>
+            </div>
+            <form onsubmit="handleLogin(event)" class="space-y-4 text-xs">
+                <div>
+                    <label class="block font-semibold text-slate-600 mb-1">Tài khoản / Email Supabase</label>
+                    <input type="text" id="username" required placeholder="Ví dụ: user1 hoặc email tài khoản" class="w-full border p-2.5 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-600 mb-1">Mật khẩu</label>
+                    <input type="password" id="password" required placeholder="Mật khẩu" class="w-full border p-2.5 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div id="login-error" class="text-red-500 text-xs hidden text-center font-semibold">Tài khoản hoặc mật khẩu không đúng!</div>
+                <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg transition shadow-md">
+                    Đăng Nhập Hợp Tác
+                </button>
+            </form>
+            <div class="mt-4 pt-3 border-t text-[11px] text-slate-400 text-center">
+                Tài khoản được quản lý bởi Supabase Auth.
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="mb-4 flex flex-wrap justify-between items-center bg-white p-3.5 rounded-xl shadow-sm border">
+        <div>
+            <h1 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <i class="fa-solid fa-industry text-indigo-600"></i>
+                Hệ Thống Điều Độ Dòng Chảy Sản Xuất Sơn
+            </h1>
+            <p class="text-xs text-slate-500">Đồng bộ Realtime Supabase - Theo dõi thời gian & Điểm nghẽn</p>
+        </div>
+        <div class="flex items-center gap-3 mt-2 sm:mt-0">
+            <div id="user-info" class="hidden items-center gap-2 bg-slate-100 px-3 py-1 rounded-lg border text-xs">
+                <i class="fa-solid fa-user-gear text-indigo-600"></i>
+                <span id="current-username" class="font-bold text-slate-700">User</span>
+                <button onclick="logout()" class="text-red-500 hover:text-red-700 ml-2 font-semibold" title="Đăng xuất"><i class="fa-solid fa-right-from-bracket"></i></button>
+            </div>
+            <span id="sync-status" class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                <i class="fa-solid fa-spinner fa-spin mr-1.5"></i> Đang kết nối...
+            </span>
+            <button onclick="openModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium shadow-sm transition">
+                <i class="fa-solid fa-plus mr-1"></i> Tạo Mẻ Sơn Mới
+            </button>
+        </div>
+    </header>
+
+    <!-- Bảng Kanban 8 Cột -->
+    <div class="grid grid-cols-1 md:grid-cols-8 gap-2 text-xs">
+
+        <!-- 0. CHỜ XUẤT NGUYÊN VẬT LIỆU -->
+        <div id="col-wait0" class="bg-orange-100/50 p-2 rounded-lg border border-orange-200 transition-all"
+             ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="handleDrop(event, 'wait0')">
+            <div class="font-bold text-orange-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-orange-300">
+                <span>⏳ Chờ xuất NVL</span>
+                <span id="c-wait0" class="bg-orange-100 px-1.5 py-0.5 rounded text-orange-800 font-bold">0</span>
+            </div>
+            <div id="wait0" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 1. PHÂN TÁN THÔ -->
+        <div class="bg-slate-200/80 p-2 rounded-lg border" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="handleDrop(event, 'step1')">
+            <div class="font-bold text-slate-700 mb-2 flex justify-between items-center bg-white p-1.5 rounded border">
+                <span class="text-amber-600">1. Phân tán thô</span>
+                <span id="c-step1" class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 font-bold">0</span>
+            </div>
+            <div id="step1" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 1.5 CHỜ NGHIỀN -->
+        <div id="col-wait2" class="bg-amber-100/50 p-2 rounded-lg border border-amber-200 transition-all" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="handleDrop(event, 'wait2')">
+            <div class="font-bold text-amber-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-amber-300">
+                <span>⏳ Chờ nghiền</span>
+                <span id="c-wait2" class="bg-amber-100 px-1.5 py-0.5 rounded text-amber-800 font-bold">0</span>
+            </div>
+            <div id="wait2" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 2. PHÂN TÁN TINH (NGHIỀN) -->
+        <div id="col-step2" class="bg-slate-200/80 p-2 rounded-lg border transition-all" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="handleDrop(event, 'step2')">
+            <div class="font-bold text-slate-700 mb-2 flex justify-between items-center bg-white p-1.5 rounded border">
+                <span class="text-blue-600">2. Phân tán tinh</span>
+                <span id="c-step2" class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 font-bold">0</span>
+            </div>
+            <div id="step2" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 2.5 CHỜ PHA LOÃNG -->
+        <div id="col-wait3" class="bg-blue-100/50 p-2 rounded-lg border border-blue-200 transition-all" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="handleDrop(event, 'wait3')">
+            <div class="font-bold text-blue-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-blue-300">
+                <span>⏳ Chờ pha loãng</span>
+                <span id="c-wait3" class="bg-blue-100 px-1.5 py-0.5 rounded text-blue-800 font-bold">0</span>
+            </div>
+            <div id="wait3" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 3. PHA LOÃNG -->
+        <div class="bg-slate-200/80 p-2 rounded-lg border" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="handleDrop(event, 'step3')">
+            <div class="font-bold text-slate-700 mb-2 flex justify-between items-center bg-white p-1.5 rounded border">
+                <span class="text-emerald-600">3. Pha loãng</span>
+                <span id="c-step3" class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 font-bold">0</span>
+            </div>
+            <div id="step3" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 3.5 CHỜ ĐÓNG THÙNG -->
+        <div class="bg-emerald-100/50 p-2 rounded-lg border border-emerald-200" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="handleDrop(event, 'wait4')">
+            <div class="font-bold text-emerald-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-emerald-300">
+                <span>⏳ Chờ đóng thùng</span>
+                <span id="c-wait4" class="bg-emerald-100 px-1.5 py-0.5 rounded text-emerald-800 font-bold">0</span>
+            </div>
+            <div id="wait4" class="kanban-col space-y-2"></div>
+        </div>
+
+        <!-- 4. ĐÓNG THÙNG & KHO -->
+        <div class="bg-purple-100/50 p-2 rounded-lg border border-purple-200" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="handleDrop(event, 'step4')">
+            <div class="font-bold text-purple-800 mb-2 flex justify-between items-center bg-white p-1.5 rounded border border-purple-300">
+                <span>4. Đóng thùng & Kho</span>
+                <span id="c-step4" class="bg-purple-100 px-1.5 py-0.5 rounded text-purple-800 font-bold">0</span>
+            </div>
+            <div id="step4" class="kanban-col space-y-2"></div>
+        </div>
+
+    </div>
+
+    <!-- Modal Chỉnh Sửa Mẻ -->
+    <div id="edit-modal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl max-w-md w-full p-5 shadow-xl">
+            <h3 class="text-base font-bold mb-3 text-slate-800">Chỉnh Sửa Thông Tin Mẻ Sơn</h3>
+            <form id="editPaintForm" onsubmit="saveEditedBatch(event)" class="space-y-3 text-xs">
+                <div>
+                    <label class="block font-semibold uppercase text-slate-500 mb-1">Mã Phiếu CN / Tên Mẻ Sơn</label>
+                    <input type="text" id="edit-code" required class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Loại sơn / Hệ sơn</label>
+                        <input type="text" id="edit-type" required class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Khối lượng (Kg)</label>
+                        <input type="number" id="edit-volume" min="0.0001" step="any" required class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Thiết bị (Máy khuấy/Nghiền)</label>
+                        <input type="text" id="edit-machine" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Người vận hành</label>
+                        <input type="text" id="edit-operator" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="closeEditModal()" class="px-3 py-1.5 border rounded hover:bg-slate-50">Hủy</button>
+                    <button type="submit" class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 font-bold">
+                        <i class="fa-solid fa-floppy-disk mr-1"></i>Lưu thay đổi
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Tạo Mẻ Mới -->
+    <div id="modal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl max-w-md w-full p-5 shadow-xl">
+            <h3 class="text-base font-bold mb-3 text-slate-800">Tạo Phiếu Công Nghệ / Mẻ Sơn Mới</h3>
+            <form id="paintForm" onsubmit="saveBatch(event)" class="space-y-3 text-xs">
+                <div>
+                    <label class="block font-semibold uppercase text-slate-500 mb-1">Mã Phiếu CN / Tên Mẻ Sơn</label>
+                    <input type="text" id="code" required placeholder="VD: PCN-8821 / Epoxy Phủ Xám" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Loại sơn / Hệ sơn (Nhập chữ)</label>
+                        <input type="text" id="type" required placeholder="VD: Alkyd, Epoxy, PU, Acrylic..." class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Khối lượng (Kg)</label>
+                        <input type="number" id="volume" required placeholder="500" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Thiết bị (Máy khuấy/Nghiền)</label>
+                        <input type="text" id="machine" placeholder="VD: Máy K02, Nghiền N01" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block font-semibold uppercase text-slate-500 mb-1">Người vận hành</label>
+                        <input type="text" id="operator" placeholder="VD: Anh Tâm" class="w-full border p-2 rounded outline-none focus:ring-1 focus:ring-indigo-500">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="closeModal()" class="px-3 py-1.5 border rounded hover:bg-slate-50">Hủy</button>
+                    <button type="submit" class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 font-bold">Tạo Mẻ Sơn</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // =========================
+        // CẤU HÌNH SUPABASE
+        // =========================
+        const SUPABASE_URL = 'https://rzrmqshhprnxzvobeegv.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_b0rHfU6id1QT-Vb93kWzqQ_t-IEAl_T';
+        const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        // Kiến trúc dữ liệu:
+        // public.batches lưu thông tin mẻ và công đoạn hiện tại.
+        // public.batch_time_logs lưu lịch sử thời gian theo từng công đoạn.
+
+        const STAGES = {
+            wait0: { id: 'wait0', name: 'Chờ xuất nguyên vật liệu', next: 'step1', nextBtn: 'Đã xuất NVL ➔ Bắt đầu Phân tán thô' },
+            step1: { id: 'step1', name: 'Phân tán thô', next: 'wait2', nextBtn: 'Hoàn tất ➔ Chờ Nghiền' },
+            wait2: { id: 'wait2', name: 'Chờ nghiền', next: 'step2', nextBtn: 'Bắt đầu Nghiền ➔' },
+            step2: { id: 'step2', name: 'Phân tán tinh (Nghiền)', next: 'wait3', nextBtn: 'Hoàn tất ➔ Chờ Pha Loãng' },
+            wait3: { id: 'wait3', name: 'Chờ pha loãng', next: 'step3', nextBtn: 'Bắt đầu Pha Loãng ➔' },
+            step3: { id: 'step3', name: 'Pha loãng', next: 'wait4', nextBtn: 'Hoàn tất ➔ Chờ Đóng Thùng' },
+            wait4: { id: 'wait4', name: 'Chờ đóng thùng', next: 'step4', nextBtn: 'Bắt đầu Đóng Thùng ➔' },
+            step4: { id: 'step4', name: 'Đóng thùng & Kho', next: 'done', nextBtn: 'Nhập Kho Complete ✔' }
+        };
+
+        let currentUser = null;
+        let localBatches = [];
+        let dragBatchId = null;
+        let realtimeChannel = null;
+        let timeLogsChannel = null;
+        let refreshTimer = null;
+        let renderTimer = null;
+        let isLoading = false;
+        let timeLogsByBatch = {};
+        let editingBatchId = null;
+
+        const $ = (id) => document.getElementById(id);
+
+        function showToast(message, type = 'info') {
+            const box = $('toast-container');
+            if (!box) return;
+
+            const styles = {
+                success: 'bg-emerald-600',
+                error: 'bg-red-600',
+                warning: 'bg-amber-500',
+                info: 'bg-slate-800'
+            };
+            const icons = {
+                success: 'fa-circle-check',
+                error: 'fa-circle-exclamation',
+                warning: 'fa-triangle-exclamation',
+                info: 'fa-circle-info'
+            };
+
+            const toast = document.createElement('div');
+            toast.className = `${styles[type] || styles.info} text-white rounded-lg shadow-lg px-4 py-3 text-xs flex items-start gap-2 toast-enter pointer-events-auto`;
+            toast.innerHTML = `<i class="fa-solid ${icons[type] || icons.info} mt-0.5"></i><span class="flex-1"></span>`;
+            toast.querySelector('span').textContent = message;
+            box.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(8px)';
+                toast.style.transition = 'all .18s ease';
+                setTimeout(() => toast.remove(), 200);
+            }, 3200);
+        }
+
+        function setLoading(show, text = 'Đang xử lý...') {
+            isLoading = show;
+            const overlay = $('loading-overlay');
+            const label = $('loading-text');
+            if (label) label.textContent = text;
+            if (overlay) {
+                overlay.classList.toggle('hidden', !show);
+                overlay.classList.toggle('flex', show);
+            }
+        }
+
+        function setSyncStatus(mode, message) {
+            const el = $('sync-status');
+            if (!el) return;
+
+            const map = {
+                online: {
+                    cls: 'bg-emerald-100 text-emerald-800',
+                    icon: 'fa-wifi'
+                },
+                connecting: {
+                    cls: 'bg-amber-100 text-amber-800',
+                    icon: 'fa-spinner fa-spin'
+                },
+                offline: {
+                    cls: 'bg-red-100 text-red-800',
+                    icon: 'fa-triangle-exclamation'
+                }
+            };
+
+            const item = map[mode] || map.connecting;
+            el.className = `inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${item.cls}`;
+            el.innerHTML = `<i class="fa-solid ${item.icon} mr-1.5"></i>${message}`;
+        }
+
+        function safeText(value, fallback = '') {
+            return value === null || value === undefined || value === '' ? fallback : String(value);
+        }
+
+        function escapeHTML(value) {
+            return String(value ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
+        }
+
+        function parseVolume(value) {
+            const n = Number(value);
+            return Number.isFinite(n) && n > 0 ? n : null;
+        }
+
+        // =========================
+        // ĐĂNG NHẬP
+        // =========================
+        function showAuthenticatedUser(user) {
+            if (!user) return;
+
+            currentUser = {
+                id: user.id,
+                username: user.email ? user.email.split('@')[0] : user.id,
+                email: user.email || '',
+                name: user.user_metadata?.name || user.email || user.id
+            };
+
+            $('login-modal')?.classList.add('hidden');
+            $('user-info')?.classList.remove('hidden');
+            $('user-info')?.classList.add('flex');
+            $('current-username').textContent = currentUser.username;
+        }
+
+        async function checkAuth() {
+            setSyncStatus('connecting', 'Đang kiểm tra đăng nhập...');
+
+            const { data, error } = await _supabase.auth.getSession();
+
+            if (error) {
+                console.error('Supabase Auth session error:', error);
+                showToast(`Không kiểm tra được phiên đăng nhập: ${error.message}`, 'error');
+                return;
+            }
+
+            if (data?.session?.user) {
+                showAuthenticatedUser(data.session.user);
+                await init();
+            } else {
+                $('login-modal')?.classList.remove('hidden');
+                setSyncStatus('connecting', 'Chưa đăng nhập');
+            }
+
+            _supabase.auth.onAuthStateChange(async (event, session) => {
+                if (event === 'SIGNED_IN' && session?.user) {
+                    showAuthenticatedUser(session.user);
+                    await init();
+                }
+
+                if (event === 'SIGNED_OUT') {
+                    currentUser = null;
+                    if (realtimeChannel) {
+                        try { await _supabase.removeChannel(realtimeChannel); } catch (_) {}
+                        realtimeChannel = null;
+                    }
+                    if (timeLogsChannel) {
+                        try { await _supabase.removeChannel(timeLogsChannel); } catch (_) {}
+                        timeLogsChannel = null;
+                    }
+                    if (refreshTimer) clearInterval(refreshTimer);
+                    $('user-info')?.classList.add('hidden');
+                    $('user-info')?.classList.remove('flex');
+                    $('login-modal')?.classList.remove('hidden');
+                    localBatches = [];
+                    render(localBatches);
+                    setSyncStatus('connecting', 'Chưa đăng nhập');
+                }
+            });
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+
+            const emailOrUsername = $('username').value.trim();
+            const password = $('password').value;
+
+            if (!emailOrUsername || !password) return;
+
+            // Cho phép nhập user1 thay vì phải nhớ email đầy đủ.
+            // Email domain này phải khớp domain tài khoản được tạo trong Supabase Auth.
+            const email = emailOrUsername.includes('@')
+                ? emailOrUsername
+                : `${emailOrUsername}@paint.local`;
+
+            $('login-error').classList.add('hidden');
+            setLoading(true, 'Đang đăng nhập...');
+
+            const { data, error } = await _supabase.auth.signInWithPassword({
+                email,
+                password
+            });
+
+            setLoading(false);
+
+            if (error) {
+                console.error('Supabase Auth login error:', error);
+                $('login-error').textContent = 'Tài khoản hoặc mật khẩu không đúng!';
+                $('login-error').classList.remove('hidden');
+                return;
+            }
+
+            if (data?.user) {
+                showAuthenticatedUser(data.user);
+                await init();
+            }
+        }
+
+        async function logout() {
+            if (realtimeChannel) {
+                try { await _supabase.removeChannel(realtimeChannel); } catch (_) {}
+                realtimeChannel = null;
+            }
+            if (refreshTimer) clearInterval(refreshTimer);
+
+            const { error } = await _supabase.auth.signOut();
+
+            if (error) {
+                console.error('Supabase Auth logout error:', error);
+                showToast(`Đăng xuất thất bại: ${error.message}`, 'error');
+                return;
+            }
+
+            showToast('Đã đăng xuất.', 'success');
+        }
+
+        // =========================
+        // SUPABASE + REALTIME
+        // =========================
+        async function init() {
+            setSyncStatus('connecting', 'Đang kết nối Supabase...');
+            await loadBatches(true);
+
+            if (realtimeChannel) {
+                try { await _supabase.removeChannel(realtimeChannel); } catch (_) {}
+                realtimeChannel = null;
+            }
+
+            realtimeChannel = _supabase
+                .channel(`batches-realtime-${Math.random().toString(36).slice(2)}`)
+                .on(
+                    'postgres_changes',
+                    { event: '*', schema: 'public', table: 'batches' },
+                    () => scheduleRefresh()
+                )
+                .subscribe((status) => {
+                    if (status === 'SUBSCRIBED') {
+                        setSyncStatus('online', 'Supabase Realtime (Online)');
+                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        setSyncStatus('offline', 'Realtime lỗi - đang tự kết nối lại');
+                    } else {
+                        setSyncStatus('connecting', 'Đang kết nối Realtime...');
+                    }
+                });
+
+            if (timeLogsChannel) {
+                try { await _supabase.removeChannel(timeLogsChannel); } catch (_) {}
+                timeLogsChannel = null;
+            }
+
+            timeLogsChannel = _supabase
+                .channel(`batch-time-logs-realtime-${Math.random().toString(36).slice(2)}`)
+                .on(
+                    'postgres_changes',
+                    { event: '*', schema: 'public', table: 'batch_time_logs' },
+                    () => scheduleRefresh()
+                )
+                .subscribe();
+
+            if (refreshTimer) clearInterval(refreshTimer);
+            refreshTimer = setInterval(() => {
+                if (localBatches.length) render(localBatches);
+            }, 60000);
+        }
+
+        function scheduleRefresh() {
+            clearTimeout(renderTimer);
+            renderTimer = setTimeout(() => loadBatches(false), 150);
+        }
+
+        // =========================
+        // TIME LOGS - BẢNG RIÊNG
+        // =========================
+        // Cấu trúc bảng Supabase cần có:
+        // public.batch_time_logs
+        // id bigint/uuid primary key
+        // batch_id kiểu phải cùng kiểu với batches.id
+        // stage text
+        // start_time timestamptz
+        // end_time timestamptz nullable
+        // updated_by text nullable
+        // created_at timestamptz default now()
+        //
+        // UNIQUE(batch_id, stage) được khuyến nghị.
+
+        async function loadTimeLogs() {
+            const { data, error } = await _supabase
+                .from('batch_time_logs')
+                .select('*');
+
+            if (error) {
+                console.error('Supabase time logs load error:', error);
+                timeLogsByBatch = {};
+                console.warn('Bảng public.batch_time_logs chưa sẵn sàng. Hãy chạy SQL tạo bảng mà ứng dụng cung cấp.');
+                return false;
+            }
+
+            const grouped = {};
+            (Array.isArray(data) ? data : []).forEach(row => {
+                const batchId = String(row.batch_id);
+                if (!grouped[batchId]) grouped[batchId] = {};
+                grouped[batchId][row.stage] = {
+                    id: row.id,
+                    start_time: row.start_time,
+                    end_time: row.end_time,
+                    updated_by: row.updated_by
+                };
+            });
+
+            timeLogsByBatch = grouped;
+            return true;
+        }
+
+        function getBatchTimeLogs(batchId) {
+            return timeLogsByBatch[String(batchId)] || {};
+        }
+
+        function mergeTimeLogsIntoBatches() {
+            localBatches = localBatches.map(batch => ({
+                ...batch,
+                time_logs: getBatchTimeLogs(batch.id)
+            }));
+        }
+
+        async function saveTimeLog(batchId, stage, values) {
+            const payload = {
+                batch_id: batchId,
+                stage,
+                start_time: values.start_time,
+                end_time: values.end_time ?? null,
+                updated_by: values.updated_by ?? (currentUser ? currentUser.username : 'Hệ thống')
+            };
+
+            // Upsert requires a UNIQUE constraint on (batch_id, stage).
+            const { data, error } = await _supabase
+                .from('batch_time_logs')
+                .upsert(payload, { onConflict: 'batch_id,stage' })
+                .select()
+                .single();
+
+            if (error) {
+                console.error('Supabase time log save error:', error);
+                return { data: null, error };
+            }
+
+            if (!timeLogsByBatch[String(batchId)]) timeLogsByBatch[String(batchId)] = {};
+            timeLogsByBatch[String(batchId)][stage] = {
+                id: data?.id,
+                start_time: data?.start_time ?? payload.start_time,
+                end_time: data?.end_time ?? payload.end_time,
+                updated_by: data?.updated_by ?? payload.updated_by
+            };
+
+            return { data, error: null };
+        }
+
+        async function deleteTimeLogsForBatch(batchId) {
+            const { error } = await _supabase
+                .from('batch_time_logs')
+                .delete()
+                .eq('batch_id', batchId);
+
+            if (error) {
+                console.error('Supabase time logs delete error:', error);
+                return false;
+            }
+
+            delete timeLogsByBatch[String(batchId)];
+            return true;
+        }
+
+        async function loadBatches(showLoader = false) {
+            if (showLoader) setLoading(true, 'Đang tải dữ liệu mẻ sơn...');
+
+            const { data, error } = await _supabase
+                .from('batches')
+                .select('*')
+                .order('created_at', { ascending: true });
+
+            if (showLoader) setLoading(false);
+
+            if (error) {
+                console.error('Supabase load error:', error);
+                setSyncStatus('offline', 'Không tải được dữ liệu');
+                showToast(`Không tải được dữ liệu: ${error.message}`, 'error');
+                return false;
+            }
+
+            localBatches = Array.isArray(data) ? data : [];
+
+            // Nạp nhật ký thời gian từ bảng riêng. Nếu bảng chưa được tạo,
+            // dữ liệu mẻ vẫn được tải để không làm hỏng phần mềm.
+            await loadTimeLogs();
+            mergeTimeLogsIntoBatches();
+
+            render(localBatches);
+            return true;
+        }
+
+        // =========================
+        // HIỂN THỊ KANBAN
+        // =========================
+        function render(batches) {
+            ['wait0', 'step1', 'wait2', 'step2', 'wait3', 'step3', 'wait4', 'step4'].forEach(colId => {
+                const el = $(colId);
+                if (el) el.innerHTML = '';
+            });
+
+            const counts = { step1: 0, wait2: 0, step2: 0, wait3: 0, step3: 0, wait4: 0, step4: 0 };
+
+            batches.forEach(b => {
+                const stageKey = STAGES[b.stage] ? b.stage : 'step1';
+                const colId = STAGES[stageKey].id;
+                counts[colId]++;
+
+                const isWait = stageKey.startsWith('wait');
+                const timeLogs = b.time_logs && typeof b.time_logs === 'object' ? b.time_logs : {};
+                const currentStageStart = timeLogs[stageKey]?.start_time || b.created_at;
+                const start = currentStageStart ? new Date(currentStageStart) : null;
+                const elapsedMs = start && !Number.isNaN(start.getTime()) ? Math.max(0, Date.now() - start.getTime()) : 0;
+                const minutesInStage = Math.floor(elapsedMs / 60000);
+                const timeText = minutesInStage < 60
+                    ? `${minutesInStage} phút`
+                    : `${Math.floor(minutesInStage / 60)} giờ ${minutesInStage % 60} ph`;
+
+                const card = document.createElement('div');
+                card.className = `batch-card bg-white p-2.5 rounded shadow-sm border cursor-grab active:cursor-grabbing hover:shadow-md transition ${isWait ? 'bg-amber-50/60 border-amber-300' : 'border-slate-200'}`;
+                card.draggable = true;
+                card.dataset.id = b.id;
+
+                card.addEventListener('dragstart', e => handleDragStart(e, b.id));
+                card.addEventListener('dragend', handleDragEnd);
+
+                const nextStage = STAGES[stageKey].next;
+                const actionHTML = stageKey !== 'step4'
+                    ? `<button data-action="advance" data-id="${escapeHTML(b.id)}" data-next="${escapeHTML(nextStage)}"
+                            class="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-medium py-1 px-1.5 rounded text-[10px] text-center border border-indigo-200 transition">
+                            ${escapeHTML(STAGES[stageKey].nextBtn)}
+                       </button>`
+                    : `<button data-action="advance" data-id="${escapeHTML(b.id)}" data-next="done"
+                            class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-1 px-1.5 rounded text-[10px] transition">
+                            <i class="fa-solid fa-check mr-1"></i>Nhập Kho
+                       </button>`;
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="font-bold text-slate-800 text-xs">${escapeHTML(safeText(b.code, 'Không có mã'))}</span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded font-bold uppercase bg-indigo-100 text-indigo-800">${escapeHTML(safeText(b.type, 'Sơn'))}</span>
+                    </div>
+                    <div class="text-[11px] text-slate-600 space-y-0.5 my-1.5">
+                        <div><i class="fa-solid fa-weight-hanging text-slate-400 w-4"></i><b>${escapeHTML(safeText(b.volume, 0))}</b> kg</div>
+                        <div><i class="fa-solid fa-gears text-slate-400 w-4"></i>${escapeHTML(safeText(b.machine, 'Chưa gán máy'))}</div>
+                        <div><i class="fa-solid fa-user text-slate-400 w-4"></i>${escapeHTML(safeText(b.operator, 'Chưa gán NV'))}</div>
+                        <div class="text-[10px] ${isWait ? 'text-amber-700 font-medium' : 'text-slate-500'} pt-1 border-t border-slate-100">
+                            <i class="fa-regular fa-clock w-4"></i>${isWait ? 'Đã chờ:' : 'Đang chạy:'} <b>${timeText}</b>
+                        </div>
+                    </div>
+                    <div class="pt-2 border-t flex items-center gap-1">
+                        <button data-action="edit" data-id="${escapeHTML(b.id)}"
+                                class="shrink-0 bg-slate-50 hover:bg-slate-100 text-slate-700 font-medium py-1 px-1.5 rounded text-[10px] border border-slate-200"
+                                title="Chỉnh sửa thông tin mẻ">
+                            <i class="fa-solid fa-pen-to-square mr-1"></i>Sửa
+                        </button>
+                        <div class="flex-1">${actionHTML}</div>
+                        <button data-action="delete" data-id="${escapeHTML(b.id)}" class="text-slate-300 hover:text-red-500 p-1" title="Xóa mẻ">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
+                    </div>
+                `;
+
+                const container = $(colId);
+                if (container) container.appendChild(card);
+            });
+
+            Object.keys(counts).forEach(key => {
+                const el = $(`c-${key}`);
+                if (el) el.textContent = counts[key];
+            });
+
+            toggleBottleneck('col-wait0', counts.wait0 >= 3);
+            toggleBottleneck('col-wait2', counts.wait2 >= 3);
+            toggleBottleneck('col-step2', counts.step2 >= 3);
+            toggleBottleneck('col-wait3', counts.wait3 >= 3);
+        }
+
+        // Event delegation: tránh tạo hàng loạt onclick inline và tránh lỗi khi ID là chuỗi.
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-action]');
+            if (!btn) return;
+
+            const id = btn.dataset.id;
+            if (btn.dataset.action === 'advance') {
+                advanceStage(id, btn.dataset.next);
+            } else if (btn.dataset.action === 'edit') {
+                openEditModal(id);
+            } else if (btn.dataset.action === 'delete') {
+                deleteBatch(id);
+            }
+        });
+
+        function toggleBottleneck(elementId, isWarning) {
+            const el = $(elementId);
+            if (!el) return;
+            el.classList.toggle('bottleneck-warning', isWarning);
+        }
+
+        // =========================
+        // DRAG & DROP
+        // =========================
+        function handleDragStart(e, id) {
+            dragBatchId = id;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(id));
+            e.currentTarget.classList.add('card-ghost');
+        }
+
+        function handleDragEnd(e) {
+            e.currentTarget.classList.remove('card-ghost');
+            dragBatchId = null;
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        }
+
+        function allowDrop(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            e.currentTarget.classList.add('drag-over');
+        }
+
+        function removeDropStyle(e) {
+            e.currentTarget.classList.remove('drag-over');
+        }
+
+        async function handleDrop(e, targetStage) {
+            e.preventDefault();
+            e.currentTarget.classList.remove('drag-over');
+
+            const idFromTransfer = e.dataTransfer?.getData('text/plain');
+            const id = dragBatchId ?? idFromTransfer;
+
+            if (!id) return;
+            await updateBatchStage(id, targetStage);
+            dragBatchId = null;
+        }
+
+        // =========================
+        // CẬP NHẬT CÔNG ĐOẠN
+        // =========================
+        async function updateBatchStage(id, nextStage) {
+            const batch = localBatches.find(b => String(b.id) === String(id));
+            if (!batch || !STAGES[nextStage]) return;
+
+            if (batch.stage === nextStage) return;
+
+            const now = new Date().toISOString();
+            const timeLogs = batch.time_logs && typeof batch.time_logs === 'object'
+                ? JSON.parse(JSON.stringify(batch.time_logs))
+                : {};
+
+            if (batch.stage && timeLogs[batch.stage]) {
+                timeLogs[batch.stage].end_time = now;
+            }
+
+            timeLogs[nextStage] = {
+                start_time: now,
+                updated_by: currentUser ? currentUser.username : 'Hệ thống'
+            };
+
+            // Khóa thao tác tạm thời để tránh click/drag liên tiếp gây ghi đè.
+            setLoading(true, `Đang chuyển mẻ ${safeText(batch.code, '')}...`);
+
+            const { data, error } = await _supabase
+                .from('batches')
+                .update({
+                    stage: nextStage
+                })
+                .eq('id', id)
+                .select()
+                .single();
+
+            if (error) {
+                setLoading(false);
+                console.error('Supabase update error:', error);
+                showToast(`Không chuyển được công đoạn: ${error.message}`, 'error');
+                return false;
+            }
+
+            // Lưu thời gian công đoạn cũ (nếu có).
+            if (batch.stage && timeLogs[batch.stage]) {
+                const oldLog = timeLogs[batch.stage];
+                const oldSave = await saveTimeLog(id, batch.stage, {
+                    start_time: oldLog.start_time,
+                    end_time: now,
+                    updated_by: currentUser ? currentUser.username : 'Hệ thống'
+                });
+
+                if (oldSave.error) {
+                    // Không rollback stage vì stage đã cập nhật thành công;
+                    // báo rõ để người dùng biết phần nhật ký thời gian gặp lỗi.
+                    setLoading(false);
+                    showToast(`Đã chuyển công đoạn nhưng chưa lưu được thời gian: ${oldSave.error.message}`, 'warning');
+                    return false;
+                }
+            }
+
+            // Tạo nhật ký bắt đầu cho công đoạn mới.
+            const newSave = await saveTimeLog(id, nextStage, {
+                start_time: now,
+                end_time: null,
+                updated_by: currentUser ? currentUser.username : 'Hệ thống'
+            });
+
+            setLoading(false);
+
+            if (newSave.error) {
+                console.error('Supabase new time log error:', newSave.error);
+                showToast(`Đã chuyển công đoạn nhưng chưa lưu được thời gian: ${newSave.error.message}`, 'warning');
+            }
+
+            // Cập nhật ngay giao diện, sau đó Realtime sẽ đồng bộ lại.
+            const idx = localBatches.findIndex(b => String(b.id) === String(id));
+            if (idx >= 0) {
+                localBatches[idx] = {
+                    ...(data || batch),
+                    stage: nextStage,
+                    time_logs: getBatchTimeLogs(id)
+                };
+            }
+            render(localBatches);
+
+            showToast(`Đã chuyển "${safeText(batch.code, 'mẻ sơn')}" → ${STAGES[nextStage].name}`, 'success');
+            return true;
+        }
+
+        async function advanceStage(id, nextStage) {
+            if (nextStage === 'done') {
+                if (!confirm('Mẻ sơn này đã hoàn tất đóng thùng. Xác nhận nhập kho thành phẩm?')) return;
+
+                setLoading(true, 'Đang xác nhận nhập kho...');
+                const { error } = await _supabase
+                    .from('batches')
+                    .delete()
+                    .eq('id', id);
+                setLoading(false);
+
+                if (error) {
+                    console.error('Supabase delete error:', error);
+                    showToast(`Không thể nhập kho: ${error.message}`, 'error');
+                    return;
+                }
+
+                const timeLogDeleted = await deleteTimeLogsForBatch(id);
+                if (!timeLogDeleted) {
+                    showToast('Đã nhập kho nhưng nhật ký thời gian chưa xóa được.', 'warning');
+                }
+
+                localBatches = localBatches.filter(b => String(b.id) !== String(id));
+                render(localBatches);
+                showToast('Đã nhập kho thành phẩm và loại mẻ khỏi bảng điều độ.', 'success');
+                return;
+            }
+
+            await updateBatchStage(id, nextStage);
+        }
+
+        // =========================
+        // TẠO MẺ
+        // =========================
+        async function saveBatch(e) {
+            e.preventDefault();
+
+            const code = $('code').value.trim();
+            const type = $('type').value.trim();
+            const volume = parseVolume($('volume').value);
+            const machine = $('machine').value.trim();
+            const operator = $('operator').value.trim();
+
+            if (!code || !type || !volume) {
+                showToast('Vui lòng nhập đủ Mã mẻ, Loại sơn và Khối lượng hợp lệ.', 'warning');
+                return;
+            }
+
+            const now = new Date().toISOString();
+            const newBatch = {
+                code,
+                type,
+                volume,
+                machine,
+                operator,
+                stage: 'wait0'
+            };
+
+            setLoading(true, 'Đang tạo mẻ sơn...');
+            const { data, error } = await _supabase
+                .from('batches')
+                .insert([newBatch])
+                .select()
+                .single();
+            setLoading(false);
+
+            if (error) {
+                console.error('Supabase insert error:', error);
+                showToast(`Không tạo được mẻ: ${error.message}`, 'error');
+                return;
+            }
+
+            if (data) {
+                const logResult = await saveTimeLog(data.id, 'wait0', {
+                    start_time: now,
+                    end_time: null,
+                    updated_by: currentUser ? currentUser.username : 'Hệ thống'
+                });
+
+                const batchWithTimeLog = {
+                    ...data,
+                    time_logs: getBatchTimeLogs(data.id)
+                };
+
+                localBatches.push(batchWithTimeLog);
+                localBatches.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+                render(localBatches);
+
+                if (logResult.error) {
+                    showToast(`Đã tạo mẻ nhưng chưa lưu được nhật ký thời gian: ${logResult.error.message}`, 'warning');
+                }
+            }
+
+            closeModal();
+            $('paintForm').reset();
+            showToast(`Đã tạo mẻ "${code}".`, 'success');
+        }
+
+        async function deleteBatch(id) {
+            const batch = localBatches.find(b => String(b.id) === String(id));
+            if (!confirm(`Bạn có chắc chắn muốn xóa phiếu công nghệ mẻ "${safeText(batch?.code, '')}"?`)) return;
+
+            setLoading(true, 'Đang xóa mẻ sơn...');
+            const { error } = await _supabase
+                .from('batches')
+                .delete()
+                .eq('id', id);
+            setLoading(false);
+
+            if (error) {
+                console.error('Supabase delete error:', error);
+                showToast(`Không xóa được mẻ: ${error.message}`, 'error');
+                return;
+            }
+
+            const timeLogDeleted = await deleteTimeLogsForBatch(id);
+            if (!timeLogDeleted) {
+                showToast('Đã xóa mẻ nhưng nhật ký thời gian chưa xóa được.', 'warning');
+            }
+
+            localBatches = localBatches.filter(b => String(b.id) !== String(id));
+            render(localBatches);
+            showToast('Đã xóa mẻ sơn.', 'success');
+        }
+
+        // =========================
+        // CHỈNH SỬA MẺ
+        // =========================
+        function openEditModal(id) {
+            const batch = localBatches.find(b => String(b.id) === String(id));
+            if (!batch) {
+                showToast('Không tìm thấy mẻ sơn cần chỉnh sửa.', 'warning');
+                return;
+            }
+
+            editingBatchId = id;
+            $('edit-code').value = safeText(batch.code);
+            $('edit-type').value = safeText(batch.type);
+            $('edit-volume').value = safeText(batch.volume);
+            $('edit-machine').value = safeText(batch.machine);
+            $('edit-operator').value = safeText(batch.operator);
+
+            $('edit-modal').classList.remove('hidden');
+            setTimeout(() => $('edit-code')?.focus(), 50);
+        }
+
+        function closeEditModal() {
+            $('edit-modal').classList.add('hidden');
+            editingBatchId = null;
+        }
+
+        async function saveEditedBatch(e) {
+            e.preventDefault();
+
+            if (editingBatchId === null || editingBatchId === undefined) {
+                showToast('Không xác định được mẻ cần chỉnh sửa.', 'error');
+                return;
+            }
+
+            const code = $('edit-code').value.trim();
+            const type = $('edit-type').value.trim();
+            const volume = parseVolume($('edit-volume').value);
+            const machine = $('edit-machine').value.trim();
+            const operator = $('edit-operator').value.trim();
+
+            if (!code || !type || !volume) {
+                showToast('Vui lòng nhập đủ Mã mẻ, Loại sơn và Khối lượng hợp lệ.', 'warning');
+                return;
+            }
+
+            setLoading(true, 'Đang lưu thông tin mẻ sơn...');
+            const { data, error } = await _supabase
+                .from('batches')
+                .update({
+                    code,
+                    type,
+                    volume,
+                    machine,
+                    operator
+                })
+                .eq('id', editingBatchId)
+                .select()
+                .single();
+            setLoading(false);
+
+            if (error) {
+                console.error('Supabase edit batch error:', error);
+                showToast(`Không lưu được thay đổi: ${error.message}`, 'error');
+                return;
+            }
+
+            const idx = localBatches.findIndex(b => String(b.id) === String(editingBatchId));
+            if (idx >= 0) {
+                localBatches[idx] = {
+                    ...localBatches[idx],
+                    ...(data || {}),
+                    time_logs: getBatchTimeLogs(editingBatchId)
+                };
+            }
+
+            render(localBatches);
+            closeEditModal();
+            showToast(`Đã cập nhật mẻ "${code}".`, 'success');
+        }
+
+        // =========================
+        // MODAL
+        // =========================
+        function openModal() {
+            $('modal').classList.remove('hidden');
+            setTimeout(() => $('code')?.focus(), 50);
+        }
+
+        function closeModal() {
+            $('modal').classList.add('hidden');
+        }
+
+        // ESC đóng modal
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { closeModal(); closeEditModal(); }
+        });
+
+        // Click nền modal để đóng
+        $('modal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'modal') closeModal();
+        });
+
+        $('edit-modal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'edit-modal') closeEditModal();
+        });
+
+        // Kiểm tra đăng nhập khi mở trang
+        checkAuth();
+    </script>
+
+    <!-- Thông báo hệ thống -->
+    <div id="toast-container" class="fixed right-4 bottom-4 z-[100] space-y-2 w-[min(92vw,380px)] pointer-events-none"></div>
+
+    <!-- Trạng thái tải dữ liệu -->
+    <div id="loading-overlay" class="fixed inset-0 bg-slate-900/20 backdrop-blur-[1px] z-40 hidden items-center justify-center">
+        <div class="bg-white rounded-xl shadow-xl border px-5 py-4 flex items-center gap-3 text-sm">
+            <i class="fa-solid fa-spinner fa-spin text-indigo-600"></i>
+            <span id="loading-text">Đang xử lý...</span>
+        </div>
+    </div>
+
+</body>
+</html>
